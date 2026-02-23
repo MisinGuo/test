@@ -1,0 +1,29 @@
+#:schema node_modules/wrangler/config-schema.json
+
+# Cloudflare Workers 配置
+name = "game-box-web"
+compatibility_date = "2025-12-24"
+compatibility_flags = ["nodejs_compat"]
+
+# Worker 入口文件
+main = ".open-next/worker.js"
+
+# 静态资源配置
+[assets]
+directory = ".open-next/assets"
+binding = "ASSETS"
+
+# 自引用服务（用于 ISR）
+[[services]]
+binding = "WORKER_SELF_REFERENCE"
+service = "game-box-web"
+
+# 环境变量 - 标记为 Workers 模式，启用按需生成
+[vars]
+CLOUDFLARE_WORKERS = "true"
+# ⚠️ 重要：配置生产环境的后端API地址
+# 请替换为你实际的后端API地址
+NEXT_PUBLIC_API_URL = "http://local.zeusai.top:8890"
+NEXT_PUBLIC_SITE_URL= "https://tmp.5awyx.com"
+NEXT_PUBLIC_SITE_ID = "1"
+# REVALIDATE_SECRET = "your-random-secret-key"  # 可选，用于ISR重新验证
