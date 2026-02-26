@@ -1,10 +1,12 @@
 import type { Metadata } from 'next'
 import { Inter } from 'next/font/google'
+import { Suspense } from 'react'
 import './globals.css'
 import { Header } from '@/components/layout/Header'
 import { Footer } from '@/components/layout/Footer'
 import { Toaster } from '@/components/ui/sonner'
 import { LocaleProvider } from '@/contexts/LocaleContext'
+import { NavigationTracker } from '@/components/common/NavigationTracker'
 import { siteConfig } from '@/config'
 
 const inter = Inter({ subsets: ['latin'] })
@@ -38,6 +40,9 @@ export default function RootLayout({
           </main>
           <Footer />
           <Toaster />
+          <Suspense fallback={null}>
+            <NavigationTracker />
+          </Suspense>
         </LocaleProvider>
       </body>
     </html>
