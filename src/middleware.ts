@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
-import { defaultLocale, supportedLocales } from '@/config/site/locales'
+
+// 直接内联常量，避免 import 大体积 locales.ts 导致 Edge Runtime bundle 超限
+const defaultLocale = 'zh-CN'
+const supportedLocales = ['zh-CN', 'zh-TW', 'en-US']
 
 export function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname
@@ -39,7 +42,8 @@ export function middleware(request: NextRequest) {
     }
     
     console.log(`[Middleware] Rewriting ${pathname} -> ${newPathname}`)
-    const newUrl = new URL(newPathname, request.url)
+    const newUrl = request.nextUrl.clone()
+    newUrl.pathname = newPathname
     return NextResponse.rewrite(newUrl)
   }
   
@@ -61,16 +65,24 @@ export function middleware(request: NextRequest) {
     (locale) => pathname.startsWith(`/${locale}/`) || pathname === `/${locale}`
   )
   
-  // 如果没有语言前缀，使用 rewrite 到默认语言（URL 不变，SEO 友好）
-  if (!pathnameHasLocale) {
-    const locale = defaultLocale
-    
-    // 使用 rewrite：URL 保持不变，但显示默认语言的内容
-    request.nextUrl.pathname = `/${locale}${pathname}`
-    return NextResponse.rewrite(request.nextUrl)
+  // 如果包含默认语言前缀，重定向到无前缀路径（默认语言不在 URL 中体现）
+  if (pathnameHasLocale) {
+    const isDefaultLocale = pathname.startsWith(`/${defaultLocale}/`) || pathname === `/${defaultLocale}`
+    if (isDefaultLocale) {
+      const newPathname = pathname === `/${defaultLocale}`
+        ? '/'
+        : pathname.slice(`/${defaultLocale}`.length)
+      const url = request.nextUrl.clone()
+      url.pathname = newPathname
+      return NextResponse.redirect(url)
+    }
+    return NextResponse.next()
   }
-  
-  return NextResponse.next()
+
+  // 没有语言前缀，使用 rewrite 到默认语言（URL 不变，SEO 友好）
+  const url = request.nextUrl.clone()
+  url.pathname = `/${defaultLocale}${pathname}`
+  return NextResponse.rewrite(url)
 }
 
 export const config = {
