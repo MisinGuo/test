@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import Image from 'next/image'
 
 interface ImageWithFallbackProps {
   src?: string | null
@@ -9,13 +10,14 @@ interface ImageWithFallbackProps {
   fallbackSrc?: string
 }
 
+const DEFAULT_FALLBACK = '/images/default-cover.svg'
+
 export default function ImageWithFallback({ 
   src, 
   alt, 
   className,
-  fallbackSrc = '/images/default-cover.svg'
+  fallbackSrc = DEFAULT_FALLBACK
 }: ImageWithFallbackProps) {
-  // 验证URL是否有效（应该以 http/https 或 / 开头）
   const isValidUrl = (url: string | null | undefined): boolean => {
     if (!url || typeof url !== 'string' || url.trim() === '') return false
     const trimmed = url.trim()
@@ -23,13 +25,11 @@ export default function ImageWithFallback({
            trimmed.startsWith('https://') || 
            trimmed.startsWith('/')
   }
-  
-  // 如果 src 无效，直接使用默认图片
+
   const initialSrc = isValidUrl(src) ? src! : fallbackSrc
   const [imgSrc, setImgSrc] = useState(initialSrc)
   const [hasError, setHasError] = useState(false)
 
-  // 当 src prop 变化时更新图片源
   useEffect(() => {
     const newSrc = isValidUrl(src) ? src! : fallbackSrc
     setImgSrc(newSrc)
@@ -44,11 +44,13 @@ export default function ImageWithFallback({
   }
 
   return (
-    <img 
+    <Image
       src={imgSrc}
       alt={alt}
+      fill
       className={className}
       onError={handleError}
+      unoptimized
     />
   )
 }
