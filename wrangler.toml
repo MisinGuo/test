@@ -1,7 +1,7 @@
 #:schema node_modules/wrangler/config-schema.json
 
 # Cloudflare Workers 配置
-name = "game-box-web"
+name = "test"
 compatibility_date = "2025-12-24"
 compatibility_flags = ["nodejs_compat"]
 
@@ -16,7 +16,7 @@ binding = "ASSETS"
 # 自引用服务（用于 ISR）
 [[services]]
 binding = "WORKER_SELF_REFERENCE"
-service = "game-box-web"
+service = "test"
 
 # 环境变量 - 标记为 Workers 模式，启用按需生成
 [vars]
