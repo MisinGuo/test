@@ -1,7 +1,7 @@
 #:schema node_modules/wrangler/config-schema.json
 
 # Cloudflare Workers 配置
-name = "game-box-web"
+name = "test"
 compatibility_date = "2025-12-24"
 compatibility_flags = ["nodejs_compat"]
 
