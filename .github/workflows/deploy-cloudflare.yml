@@ -1,4 +1,4 @@
-name: Deploy to Cloudflare Workers
+name: 部署到 Cloudflare Workers
 
 on:
   push:
