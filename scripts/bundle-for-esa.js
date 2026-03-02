@@ -96,6 +96,45 @@ parse:function(p){var b=r.basename(p);var e=r.extname(b);return{root:'',dir:r.di
 // node:path 与 path 同一 polyfill
 MODULE_POLYFILLS['node:path'] = MODULE_POLYFILLS['path']
 
+// node:process polyfill — V8 Isolate 没有全局 process
+const PROCESS_POLYFILL = `(function(){
+var _env={};
+try{if(typeof __env__!=='undefined')_env=__env__;}catch(e){}
+var _p={
+  env:_env,
+  cwd:function(){return '/'},
+  argv:['node','worker.js'],
+  argv0:'node',
+  platform:'linux',
+  version:'v18.0.0',
+  versions:{node:'18.0.0'},
+  release:{name:'node'},
+  hrtime:function(p){var n=Date.now();var s=Math.floor(n/1000);var ms=(n%1000)*1e6;if(p)return[s-p[0],(ms-p[1]+1e9)%1e9];return[s,ms];},
+  hrtime:{bigint:function(){return BigInt(Date.now())*BigInt(1e6)}},
+  nextTick:function(fn){Promise.resolve().then(fn);},
+  exit:function(){},
+  exitCode:0,
+  pid:1,
+  ppid:0,
+  title:'node',
+  arch:'x64',
+  execPath:'/usr/bin/node',
+  execArgv:[],
+  umask:function(){return 0o022;},
+  on:function(){return _p;},
+  off:function(){return _p;},
+  once:function(){return _p;},
+  emit:function(){return false;},
+  removeListener:function(){return _p;},
+  removeAllListeners:function(){return _p;},
+};
+_p.hrtime.bigint=function(){return BigInt(Date.now())*BigInt(1e6);};
+return _p;
+})()`
+
+MODULE_POLYFILLS['process'     ] = PROCESS_POLYFILL
+MODULE_POLYFILLS['node:process'] = PROCESS_POLYFILL
+
 // 对给定的 node 模块裸名 + 导出名，返回最佳的运行时表达式
 function resolveNodeExport(bareMod, orig, mod) {
   const key   = `${bareMod}.${orig}`
@@ -183,14 +222,16 @@ function patchCode(code) {
     (_, varName) => `const ${varName} = {};\n`
   )
 
-  // 6. require("fs") / require("async_hooks") 等裸名称 CJS require
+  // 6. require("fs") / require("async_hooks") / require("process") 等裸名称 CJS require
   //    minified bundle 内有大量此类调用，ESA esbuild 同样会静态解析
-  //    替换为 safeRequire 匿名函数调用，绕过 ESA 的静态模块解析
-  //    (?<!\.) 负向后瞻：排除 obj.require("xxx") 这类对象方法调用，避免生成非法语法
+  //    (?<!\.） 负向后瞻：排除 obj.require("xxx") 这类对象方法调用，避免生成非法语法
   code = code.replace(
     /(?<!\.)require\("([^"]+)"\)/g,
     (match, id) => {
       const bare = id.replace(/^node:/, '')
+      // 若有整模块 polyfill，直接内联，避免运行时返回 {}
+      const modPoly = MODULE_POLYFILLS[bare] || MODULE_POLYFILLS[id]
+      if (modPoly) return modPoly
       if (BUILTIN_SET.has(bare)) {
         return `${safeRequire}(${JSON.stringify(id)})`
       }
@@ -226,7 +267,35 @@ function walkAndPatch(dir) {
   }
 }
 
+// ─── 向关键入口文件注入 process / globalThis 修复 ────────────────────────────
+// 代码里大量使用裸 process.env 而不导入，需在最顶部保证 process 全局存在
+function injectProcessGlobal(filePath) {
+  if (!fs.existsSync(filePath)) return
+  const original = fs.readFileSync(filePath, 'utf-8')
+  const guard = '/* esa-process-polyfill */'
+  if (original.includes(guard)) return // 已注入，跳过
+  const injection = [
+    guard,
+    `if (typeof globalThis.process === 'undefined' || typeof globalThis.process.env === 'undefined') {`,
+    `  globalThis.process = ${PROCESS_POLYFILL};`,
+    `}`,
+    '',
+  ].join('\n')
+  fs.writeFileSync(filePath, injection + original, 'utf-8')
+  console.log(`[bundle-for-esa] Injected process polyfill: ${path.relative(openNextDir, filePath)}`)
+}
+
 console.log('[bundle-for-esa] Scanning .open-next/ for problematic imports...')
 walkAndPatch(openNextDir)
+
+// 向所有入口文件注入 process global（worker.js + handler.mjs 文件）
+const ENTRY_FILES = [
+  path.join(openNextDir, 'worker.js'),
+  path.join(openNextDir, 'middleware', 'handler.mjs'),
+  path.join(openNextDir, 'server-functions', 'default', 'handler.mjs'),
+  path.join(openNextDir, 'server-functions', 'default', 'index.mjs'),
+]
+ENTRY_FILES.forEach(injectProcessGlobal)
+
 console.log('[bundle-for-esa] Patch complete. All files are ready for ESA.')
 
