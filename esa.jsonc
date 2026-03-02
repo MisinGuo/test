@@ -4,6 +4,8 @@
   "name": "game-box",
   "installCommand": "pnpm install",
   "buildCommand": "pnpm build:aliyun",
+  // SSR 边缘函数入口文件（opennextjs-cloudflare 构建产物）
+  "entry": ".open-next/worker.js",
   "assets": {
     // 静态资源目录（JS/CSS/图片等）
     "directory": ".open-next/assets",
