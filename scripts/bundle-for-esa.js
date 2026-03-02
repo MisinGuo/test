@@ -27,6 +27,9 @@ const safeRequire = `(function(id){
   return {};
 })`
 
+const { builtinModules } = require('module')
+const BUILTIN_SET = new Set(builtinModules) // fs, path, async_hooks, url ...
+
 // node:timers 中的这些 API 本身就是 JS 全局变量
 const TIMER_GLOBALS = new Set([
   'setTimeout','clearTimeout','setInterval','clearInterval',
@@ -34,9 +37,9 @@ const TIMER_GLOBALS = new Set([
 ])
 
 function patchCode(code) {
-  // 1. import { A, B as C } from "node:xxx"
+  // 1. import { A, B as C } from "node:xxx"  （\s* 兼容 minified 无空格情形）
   code = code.replace(
-    /import\s+\{([^}]+)\}\s+from\s+"(node:[^"]+)";?[ \t]*\n?/g,
+    /import\s+\{([^}]+)\}\s+from\s*"(node:[^"]+)";?[ \t]*\n?/g,
     (_, names, mod) => {
       const lines = names.split(',').map(n => {
         n = n.trim()
@@ -54,21 +57,21 @@ function patchCode(code) {
 
   // 2. import * as X from "node:xxx"
   code = code.replace(
-    /import\s+\*\s+as\s+(\w+)\s+from\s+"(node:[^"]+)";?[ \t]*\n?/g,
+    /import\s+\*\s+as\s+(\w+)\s+from\s*"(node:[^"]+)";?[ \t]*\n?/g,
     (_, varName, mod) =>
       `const ${varName} = ${safeRequire}(${JSON.stringify(mod)});\n`
   )
 
   // 3. import X from "node:xxx"
   code = code.replace(
-    /import\s+(\w+)\s+from\s+"(node:[^"]+)";?[ \t]*\n?/g,
+    /import\s+(\w+)\s+from\s*"(node:[^"]+)";?[ \t]*\n?/g,
     (_, varName, mod) =>
       `const ${varName} = ${safeRequire}(${JSON.stringify(mod)});\n`
   )
 
   // 4. import { DurableObject, ... } from "cloudflare:workers" → 空桩类
   code = code.replace(
-    /import\s+\{([^}]+)\}\s+from\s+"cloudflare:[^"]+";?[ \t]*\n?/g,
+    /import\s+\{([^}]+)\}\s+from\s*"cloudflare:[^"]+";?[ \t]*\n?/g,
     (_, names) => {
       const stubs = names.split(',').map(n => {
         n = n.trim()
@@ -81,8 +84,22 @@ function patchCode(code) {
 
   // 5. import X from "cloudflare:xxx"
   code = code.replace(
-    /import\s+(\w+)\s+from\s+"cloudflare:[^"]+";?[ \t]*\n?/g,
+    /import\s+(\w+)\s+from\s*"cloudflare:[^"]+";?[ \t]*\n?/g,
     (_, varName) => `const ${varName} = {};\n`
+  )
+
+  // 6. require("fs") / require("async_hooks") 等裸名称 CJS require
+  //    minified bundle 内有大量此类调用，ESA esbuild 同样会静态解析
+  //    替换为 safeRequire 匿名函数调用，绕过 ESA 的静态模块解析
+  code = code.replace(
+    /require\("([^"]+)"\)/g,
+    (match, id) => {
+      const bare = id.replace(/^node:/, '')
+      if (BUILTIN_SET.has(bare)) {
+        return `${safeRequire}(${JSON.stringify(id)})`
+      }
+      return match // 非内置模块保持不变
+    }
   )
 
   return code
@@ -96,8 +113,12 @@ function walkAndPatch(dir) {
       walkAndPatch(fullPath)
     } else if (entry.isFile() && /\.(js|mjs)$/.test(entry.name)) {
       const original = fs.readFileSync(fullPath, 'utf-8')
-      // 快速检测：只处理含有问题 import 的文件，跳过纯静态资源
-      if (!original.includes('from "node:') && !original.includes('from "cloudflare:')) {
+      // 快速检测：只处理含有问题 import/require 的文件，跳过纯静态资源
+      if (!original.includes('from "node:') &&
+          !original.includes('from"node:') &&
+          !original.includes('from "cloudflare:') &&
+          !original.includes('from"cloudflare:') &&
+          !original.includes('require("')) {
         continue
       }
       const patched = patchCode(original)
