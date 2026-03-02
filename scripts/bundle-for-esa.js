@@ -91,8 +91,9 @@ function patchCode(code) {
   // 6. require("fs") / require("async_hooks") 等裸名称 CJS require
   //    minified bundle 内有大量此类调用，ESA esbuild 同样会静态解析
   //    替换为 safeRequire 匿名函数调用，绕过 ESA 的静态模块解析
+  //    (?<!\.) 负向后瞻：排除 obj.require("xxx") 这类对象方法调用，避免生成非法语法
   code = code.replace(
-    /require\("([^"]+)"\)/g,
+    /(?<!\.)require\("([^"]+)"\)/g,
     (match, id) => {
       const bare = id.replace(/^node:/, '')
       if (BUILTIN_SET.has(bare)) {
