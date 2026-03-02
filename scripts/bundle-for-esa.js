@@ -24,15 +24,11 @@ if (!fs.existsSync(input)) {
 }
 
 // 直接通过 JS API 调用已安装的 esbuild，无需 npx / 全局命令
-let esbuild
-try {
-  esbuild = require('esbuild')
-} catch {
-  // fallback：从 @opennextjs/cloudflare 的依赖路径加载
-  esbuild = require(require.resolve('esbuild', {
-    paths: [path.join(root, 'node_modules', '@opennextjs', 'cloudflare')],
-  }))
-}
+// pnpm 隔离了包作用域，esbuild 是 @opennextjs/cloudflare 的依赖，
+// 需要在其上下文中解析，而不是从项目根目录直接 require
+const { createRequire } = require('node:module')
+const cfRequire = createRequire(require.resolve('@opennextjs/cloudflare'))
+const esbuild = cfRequire('esbuild')
 
 console.log('[bundle-for-esa] Re-bundling worker.js for ESA platform...')
 
