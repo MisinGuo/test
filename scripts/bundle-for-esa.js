@@ -1,118 +1,92 @@
 /**
  * ESA 构建后处理脚本
  *
- * 问题：ESA 平台会对 entry 文件再跑一次自己的 esbuild，
- *       该 esbuild 不支持 node:* / cloudflare:* 模块，导致构建失败。
+ * 问题：ESA 平台对 entry 文件再跑一遍自己的 esbuild，不支持 node:* / cloudflare:* 导入。
  *
- * 解法：用 esbuild plugin 彻底消除这些 import 语句：
- *   - node:* / 裸名称内置模块 → 替换为 globalThis 访问
- *     （ESA 的 nodejs_compat 运行时会把 Node.js 内置模块注入到 globalThis）
- *   - cloudflare:workers → 替换为空桩（DurableObjects 已在 open-next.config.ts 禁用）
+ * 解法：直接对 worker.js 做文本级正则替换，把 ESM import 语句改写为
+ *       运行时动态加载（globalThis.__require 或全局变量），
+ *       彻底消除 ESA 打包器能看到的静态 import，同时保留运行时能力。
+ *
+ * ESA nodejs_compat 运行时会在 globalThis 注入 __require / require，
+ * 所以改写后的代码在 ESA 边缘节点上可以正常执行。
  */
 
 const path = require('path')
-const fs = require('fs')
-const { builtinModules, createRequire } = require('node:module')
+const fs   = require('fs')
 
-const root = path.resolve(__dirname, '..')
-const input = path.join(root, '.open-next', 'worker.js')
-const output = path.join(root, '.open-next', 'worker.esa.js')
+const root   = path.resolve(__dirname, '..')
+const target = path.join(root, '.open-next', 'worker.js')
 
-if (!fs.existsSync(input)) {
+if (!fs.existsSync(target)) {
   console.error('[bundle-for-esa] .open-next/worker.js not found, did the build fail?')
   process.exit(1)
 }
 
-// 通过 @opennextjs/cloudflare 的上下文加载 esbuild（绕开 pnpm 包隔离）
-const cfRequire = createRequire(require.resolve('@opennextjs/cloudflare'))
-const esbuild = cfRequire('esbuild')
+console.log('[bundle-for-esa] Patching worker.js for ESA platform...')
 
-// ─── Plugin 1: node 内置模块 → globalThis 访问 ───────────────────────────────
-// ESA nodejs_compat 在运行时把 require('fs') 等注入到 globalThis.__require
-// 这里用 globalThis.process / globalThis.Buffer 等全局变量接住即可正常运行
-const nodeBuiltinPlugin = {
-  name: 'node-builtin-to-global',
-  setup(build) {
-    // 匹配 node:xxx 和裸名称（fs / path / crypto ...）
-    const builtinSet = new Set(builtinModules)
-    const filter = /^(node:)?[a-z_][a-z0-9_/]*$/
+let code = fs.readFileSync(target, 'utf-8')
 
-    build.onResolve({ filter }, (args) => {
-      const bare = args.path.replace(/^node:/, '')
-      if (!builtinSet.has(bare)) return
-      return { path: bare, namespace: 'node-builtin-global' }
-    })
+// ─── 辅助：把"需要运行时提供"的模块调用包成不被静态分析的动态 require ──────────
+// 使用 new Function 绕过 esbuild 静态分析，同时兼容 require 不存在的情况
+const safeRequire = `(function(id){
+  try {
+    if (typeof __require === 'function') return __require(id);
+    if (typeof require  === 'function') return require(id);
+  } catch(e) {}
+  return {};
+})`
 
-    build.onLoad({ filter: /.*/, namespace: 'node-builtin-global' }, (args) => {
-      const varName = `__node_${args.path.replace(/[^a-zA-Z0-9]/g, '_')}`
-      // 在 ESA nodejs_compat 运行时中，可通过如下方式获取内置模块：
-      //   globalThis[Symbol.for('nodejs.module.require')]('fs')
-      // 但最保险的写法是直接用 globalThis 上已有的全局对象（process/Buffer/etc.）
-      // 通用降级：返回一个 Proxy，访问时再从 globalThis 上取
-      return {
-        contents: `
-const _req = typeof __require !== 'undefined' ? __require
-  : typeof require !== 'undefined' ? require
-  : (id) => (globalThis[id] ?? {});
-const _mod = (() => { try { return _req(${JSON.stringify(args.path)}); } catch(e) { return globalThis[${JSON.stringify(args.path)}] ?? {}; } })();
-export default _mod;
-export const {
-  ${Object.keys(require(args.path) || {})
-    .filter(k => /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(k) && k !== 'default')
-    .join(',\n  ')}
-} = _mod;
-`,
-        loader: 'js',
+// ─── 1. import { A, B, C } from "node:xxx"  →  const { A, B, C } = safeRequire("node:xxx") ──
+code = code.replace(
+  /import\s+\{([^}]+)\}\s+from\s+"(node:[^"]+)";?\n?/g,
+  (_, names, mod) => {
+    // 对 node:timers 的导出优先使用全局变量（事件循环 API 本身就是全局的）
+    const timerGlobals = new Set(['setTimeout','clearTimeout','setInterval','clearInterval','setImmediate','clearImmediate'])
+    const entries = names.split(',').map(n => n.trim()).map(n => {
+      const alias = n.includes(' as ') ? n.split(' as ')[1].trim() : n
+      const orig  = n.includes(' as ') ? n.split(' as ')[0].trim() : n
+      if (timerGlobals.has(orig)) {
+        return `const ${alias} = globalThis.${orig} ?? ${safeRequire}(${JSON.stringify(mod)}).${orig};`
       }
+      return `const ${alias} = ${safeRequire}(${JSON.stringify(mod)}).${orig};`
     })
-  },
-}
+    return entries.join('\n') + '\n'
+  }
+)
 
-// ─── Plugin 2: cloudflare:workers → 空桩 ─────────────────────────────────────
-// DurableObjects 已在 open-next.config.ts 中通过 "dummy" 禁用，
-// 但 opennextjs-cloudflare 仍然 import 了该模块，放一个空桩防止报错
-const cloudflareStubPlugin = {
-  name: 'cloudflare-stub',
-  setup(build) {
-    build.onResolve({ filter: /^cloudflare:/ }, (args) => ({
-      path: args.path,
-      namespace: 'cloudflare-stub',
-    }))
-    build.onLoad({ filter: /.*/, namespace: 'cloudflare-stub' }, () => ({
-      // 提供 DurableObject 等常用导出的空实现
-      contents: `
-export class DurableObject {}
-export class DurableObjectStub {}
-export class DurableObjectStorage {}
-export class DurableObjectState {}
-export class DurableObjectNamespace {}
-export class WebSocketPair {}
-export class Response {}
-export class Request {}
-`,
-      loader: 'js',
-    }))
-  },
-}
+// ─── 2. import * as X from "node:xxx"  →  const X = safeRequire("node:xxx") ──────────────────
+code = code.replace(
+  /import\s+\*\s+as\s+(\w+)\s+from\s+"(node:[^"]+)";?\n?/g,
+  (_, varName, mod) =>
+    `const ${varName} = ${safeRequire}(${JSON.stringify(mod)});\n`
+)
 
-console.log('[bundle-for-esa] Re-bundling worker.js for ESA platform...')
+// ─── 3. import X from "node:xxx"  →  const X = safeRequire("node:xxx") ────────────────────────
+code = code.replace(
+  /import\s+(\w+)\s+from\s+"(node:[^"]+)";?\n?/g,
+  (_, varName, mod) =>
+    `const ${varName} = ${safeRequire}(${JSON.stringify(mod)});\n`
+)
 
-esbuild.build({
-  entryPoints: [input],
-  bundle: true,
-  format: 'esm',
-  platform: 'neutral',
-  target: 'es2022',
-  plugins: [nodeBuiltinPlugin, cloudflareStubPlugin],
-  outfile: output,
-  logLevel: 'warning',
-  // 允许覆盖 globalThis 上已有的同名导出（避免 cloudflare stub 与运行时冲突）
-  ignoreAnnotations: true,
-}).then(() => {
-  console.log('[bundle-for-esa] Done → .open-next/worker.esa.js')
-  fs.copyFileSync(output, input)
-  console.log('[bundle-for-esa] Replaced .open-next/worker.js with bundled version.')
-}).catch((e) => {
-  console.error('[bundle-for-esa] esbuild failed:', e.message)
-  process.exit(1)
-})
+// ─── 4. import { DurableObject … } from "cloudflare:workers"  →  空桩 ────────────────────────
+// open-next.config.ts 已禁用 DurableObjects（incrementalCache/tagCache/queue: dummy）
+// 但 bundle 里仍保留了 import，用空类桩代替即可
+code = code.replace(
+  /import\s+\{([^}]+)\}\s+from\s+"cloudflare:[^"]+";?\n?/g,
+  (_, names) => {
+    const stubs = names.split(',').map(n => {
+      const alias = n.trim().includes(' as ') ? n.trim().split(' as ')[1].trim() : n.trim()
+      return `class ${alias} {}`
+    })
+    return stubs.join('\n') + '\n'
+  }
+)
+
+// ─── 5. import X from "cloudflare:xxx"  →  const X = {} ─────────────────────────────────────
+code = code.replace(
+  /import\s+(\w+)\s+from\s+"cloudflare:[^"]+";?\n?/g,
+  (_, varName) => `const ${varName} = {};\n`
+)
+
+fs.writeFileSync(target, code, 'utf-8')
+console.log('[bundle-for-esa] Patch complete. .open-next/worker.js is ready for ESA.')
