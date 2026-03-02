@@ -239,11 +239,11 @@ function patchCode(code) {
     }
   )
 
-  // 7. ctx.waitUntil(...) / ctx.passThroughOnException()
-  //    ESA ExecutionContext 可能不提供这些方法，或 ctx 本身为 undefined，
-  //    改为可选链调用，缺失时静默忽略（不影响响应逻辑，只影响后台任务生命周期）
-  code = code.replace(/\.waitUntil\s*\(/g, '?.waitUntil?.(')
-  code = code.replace(/\.passThroughOnException\s*\(\s*\)/g, '?.passThroughOnException?.()')
+  // 7. ctx.waitUntil(...) / ctx.passThroughOnException(...)
+  //    ESA 的 ExecutionContext(ctx，fetch 第 3 参数) 可能为 undefined 或不含这些方法
+  //    改为可选链，避免 "Cannot read properties of undefined" 崩溃
+  code = code.replace(/\.waitUntil\(/g, '?.waitUntil?.(')
+  code = code.replace(/\.passThroughOnException\(/g, '?.passThroughOnException?.(')
 
   return code
 }
@@ -256,7 +256,7 @@ function walkAndPatch(dir) {
       walkAndPatch(fullPath)
     } else if (entry.isFile() && /\.(js|mjs)$/.test(entry.name)) {
       const original = fs.readFileSync(fullPath, 'utf-8')
-      // 快速检测：只处理含有问题 import/require 或 ctx API 的文件，跳过纯静态资源
+      // 快速检测：只处理含有问题 import/require 的文件，跳过纯静态资源
       if (!original.includes('from "node:') &&
           !original.includes('from"node:') &&
           !original.includes('from "cloudflare:') &&
