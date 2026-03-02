@@ -15,10 +15,8 @@ const nextConfig = {
   // 本地开发直接 pnpm dev 时不设置此变量，行为与之前完全一致
   basePath: process.env.NEXT_BASE_PATH || '',
   
-  // 文件跟踪：Cloudflare 模式下必须显式设为 false
-  // （Next.js 默认值为 true，spread 省略写法无效，必须显式覆盖）
-  // Cloudflare 模式下 standalone 写入会在 Windows 尝试创建 symlink 报 EPERM
-  outputFileTracing: !isCloudflareWorkers,
+  // 文件跟踪：始终启用（Next.js 未来版本将强制要求）
+  outputFileTracing: true,
   
   // 图片优化配置
   images: {
