@@ -39,7 +39,7 @@ const TIMER_GLOBALS = new Set([
 function patchCode(code) {
   // 1. import { A, B as C } from "node:xxx"  （\s* 兼容 minified 无空格情形）
   code = code.replace(
-    /import\s+\{([^}]+)\}\s+from\s*"(node:[^"]+)";?[ \t]*\n?/g,
+    /import\s*\{([^}]+)\}\s*from\s*"(node:[^"]+)";?[ \t]*\n?/g,
     (_, names, mod) => {
       const lines = names.split(',').map(n => {
         n = n.trim()
@@ -57,21 +57,21 @@ function patchCode(code) {
 
   // 2. import * as X from "node:xxx"
   code = code.replace(
-    /import\s+\*\s+as\s+(\w+)\s+from\s*"(node:[^"]+)";?[ \t]*\n?/g,
+    /import\s*\*\s*as\s+(\w+)\s+from\s*"(node:[^"]+)";?[ \t]*\n?/g,
     (_, varName, mod) =>
       `const ${varName} = ${safeRequire}(${JSON.stringify(mod)});\n`
   )
 
   // 3. import X from "node:xxx"
   code = code.replace(
-    /import\s+(\w+)\s+from\s*"(node:[^"]+)";?[ \t]*\n?/g,
+    /import\s+(\w+)\s*from\s*"(node:[^"]+)";?[ \t]*\n?/g,
     (_, varName, mod) =>
       `const ${varName} = ${safeRequire}(${JSON.stringify(mod)});\n`
   )
 
   // 4. import { DurableObject, ... } from "cloudflare:workers" → 空桩类
   code = code.replace(
-    /import\s+\{([^}]+)\}\s+from\s*"cloudflare:[^"]+";?[ \t]*\n?/g,
+    /import\s*\{([^}]+)\}\s*from\s*"cloudflare:[^"]+";?[ \t]*\n?/g,
     (_, names) => {
       const stubs = names.split(',').map(n => {
         n = n.trim()
@@ -84,7 +84,7 @@ function patchCode(code) {
 
   // 5. import X from "cloudflare:xxx"
   code = code.replace(
-    /import\s+(\w+)\s+from\s*"cloudflare:[^"]+";?[ \t]*\n?/g,
+    /import\s+(\w+)\s*from\s*"cloudflare:[^"]+";?[ \t]*\n?/g,
     (_, varName) => `const ${varName} = {};\n`
   )
 
