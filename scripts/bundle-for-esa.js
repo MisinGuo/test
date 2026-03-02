@@ -36,34 +36,55 @@ const TIMER_GLOBALS = new Set([
   'setImmediate','clearImmediate',
 ])
 
-// V8 Isolate（Cloudflare Workers / Aliyun ESA）中作为全局变量提供的 node 模块导出。
-// 直接使用 globalThis.xxx 比 safeRequire 更可靠，可避免 "X is not a constructor" 错误。
-// key = "裸模块名.导出名"，value = 对应的全局变量名
+// V8 Isolate（Cloudflare Workers / Aliyun ESA）中部分 node 模块导出有对应全局变量或可内联 polyfill。
+// key = "裸模块名.导出名"
+// value.global   = globalThis 上的属性名（若平台提供）
+// value.polyfill = 当 global 不可用时使用的内联回退表达式（字符串）
 const V8_GLOBAL_MAP = {
-  // node:async_hooks
-  'async_hooks.AsyncLocalStorage': 'AsyncLocalStorage',
-  'async_hooks.AsyncResource':     'AsyncResource',
+  // node:async_hooks — V8 Isolate 可能没有全局 AsyncLocalStorage，提供内联 polyfill
+  'async_hooks.AsyncLocalStorage': {
+    global: 'AsyncLocalStorage',
+    polyfill: [
+      'class AsyncLocalStorage{',
+      '#s=undefined;',
+      'run(s,f,...a){const p=this.#s;this.#s=s;try{return f(...a)}finally{this.#s=p}}',
+      'getStore(){return this.#s}',
+      'enterWith(s){this.#s=s}',
+      'disable(){}',
+      'static bind(fn){return fn}',
+      'static snapshot(){return(f,...a)=>f(...a)}',
+      '}',
+    ].join(''),
+  },
+  'async_hooks.AsyncResource': {
+    global: 'AsyncResource',
+    polyfill: [
+      'class AsyncResource{',
+      'constructor(t){this.type=t}',
+      'runInAsyncScope(f,...a){return f.apply(this,a)}',
+      'static bind(fn,t,ctx){return fn.bind(ctx)}',
+      'emitDestroy(){return this}',
+      '}',
+    ].join(''),
+  },
   // node:buffer
-  'buffer.Buffer':  'Buffer',
-  'buffer.Blob':    'Blob',
-  // node:process
-  'process.default': 'process',
-  // node:console
-  'console.default': 'console',
-  // node:URL / node:url (有时以默认导出形式)
-  'url.URL':            'URL',
-  'url.URLSearchParams':'URLSearchParams',
-  // node:crypto  (Web Crypto)
-  'crypto.subtle': 'crypto.subtle',  // 不是构造函数，跳过
+  'buffer.Buffer':  { global: 'Buffer',  polyfill: null },
+  'buffer.Blob':    { global: 'Blob',    polyfill: null },
+  // node:url
+  'url.URL':             { global: 'URL',             polyfill: null },
+  'url.URLSearchParams': { global: 'URLSearchParams', polyfill: null },
 }
 
 // 对给定的 node 模块裸名 + 导出名，返回最佳的运行时表达式
 function resolveNodeExport(bareMod, orig, mod) {
-  const key = `${bareMod}.${orig}`
-  if (V8_GLOBAL_MAP[key]) {
-    const g = V8_GLOBAL_MAP[key]
-    // 避免 "g is not a constructor" — 先查 globalThis，回退 safeRequire
-    return `(typeof globalThis.${g} !== 'undefined' ? globalThis.${g} : ${safeRequire}(${JSON.stringify(mod)}).${orig})`
+  const key   = `${bareMod}.${orig}`
+  const entry = V8_GLOBAL_MAP[key]
+  if (entry) {
+    const g        = entry.global
+    const fallback = entry.polyfill
+      ? `(${entry.polyfill})`                                        // 内联 polyfill 类
+      : `${safeRequire}(${JSON.stringify(mod)}).${orig}`             // 通用回退
+    return `(typeof globalThis.${g} !== 'undefined' ? globalThis.${g} : ${fallback})`
   }
   if (TIMER_GLOBALS.has(orig)) {
     return `(globalThis.${orig} ?? ${safeRequire}(${JSON.stringify(mod)}).${orig})`
