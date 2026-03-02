@@ -1,0 +1,16 @@
+{
+  // 阿里云 ESA（边缘安全加速）SSR 部署配置
+  // 底层与 Cloudflare Workers 同为 V8 Isolate，复用 opennextjs-cloudflare 构建产物
+  "name": "game-box",
+  "installCommand": "pnpm install",
+  "buildCommand": "pnpm build:aliyun",
+  "functions": {
+    // SSR 边缘函数入口（opennextjs-cloudflare 构建产物）
+    "entrypoint": ".open-next/worker.js"
+  },
+  "assets": {
+    // 静态资源目录（JS/CSS/图片等）
+    "directory": ".open-next/assets",
+    "notFoundStrategy": "404Page"
+  }
+}

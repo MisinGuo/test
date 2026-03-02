@@ -7,6 +7,8 @@
     "build": "next build",
     "build:prod": "cross-env NODE_ENV=production next build",
     "build:cfworkers": "cross-env CLOUDFLARE_WORKERS=true NODE_ENV=production opennextjs-cloudflare build",
+    "build:aliyun": "cross-env ALIYUN_ESA=true NODE_ENV=production opennextjs-cloudflare build",
+    "preview:aliyun": "cross-env ALIYUN_ESA=true NODE_ENV=production opennextjs-cloudflare build && opennextjs-cloudflare preview",
     "start": "next start",
     "lint": "next lint",
     "preview:cfworkers": "cross-env CLOUDFLARE_WORKERS=true NODE_ENV=production opennextjs-cloudflare build && opennextjs-cloudflare preview",

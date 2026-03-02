@@ -2,14 +2,15 @@
 
 // 自动检测构建环境
 const isCloudflareWorkers = process.env.CLOUDFLARE_WORKERS === 'true'
+const isAliyunESA = process.env.ALIYUN_ESA === 'true'
 const isWindows = process.platform === 'win32'
 const isProduction = process.env.NODE_ENV === 'production'
 
 const nextConfig = {
   // 构建模式：智能选择
-  // - Cloudflare Workers: 不使用 standalone（由 opennextjs-cloudflare 处理）
+  // - Cloudflare Workers / Aliyun ESA: 不设置 output（由 opennextjs-cloudflare 处理，V8 Isolate 运行时）
   // - 其他环境: 使用 standalone 支持 ISR
-  ...(!isCloudflareWorkers && { output: 'standalone' }),
+  ...(!isCloudflareWorkers && !isAliyunESA && { output: 'standalone' }),
 
   // 通过环境变量支持反向代理路径前缀（由管理平台代码预览功能注入）
   // 本地开发直接 pnpm dev 时不设置此变量，行为与之前完全一致
