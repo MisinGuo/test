@@ -36,20 +36,53 @@ const TIMER_GLOBALS = new Set([
   'setImmediate','clearImmediate',
 ])
 
+// V8 Isolate（Cloudflare Workers / Aliyun ESA）中作为全局变量提供的 node 模块导出。
+// 直接使用 globalThis.xxx 比 safeRequire 更可靠，可避免 "X is not a constructor" 错误。
+// key = "裸模块名.导出名"，value = 对应的全局变量名
+const V8_GLOBAL_MAP = {
+  // node:async_hooks
+  'async_hooks.AsyncLocalStorage': 'AsyncLocalStorage',
+  'async_hooks.AsyncResource':     'AsyncResource',
+  // node:buffer
+  'buffer.Buffer':  'Buffer',
+  'buffer.Blob':    'Blob',
+  // node:process
+  'process.default': 'process',
+  // node:console
+  'console.default': 'console',
+  // node:URL / node:url (有时以默认导出形式)
+  'url.URL':            'URL',
+  'url.URLSearchParams':'URLSearchParams',
+  // node:crypto  (Web Crypto)
+  'crypto.subtle': 'crypto.subtle',  // 不是构造函数，跳过
+}
+
+// 对给定的 node 模块裸名 + 导出名，返回最佳的运行时表达式
+function resolveNodeExport(bareMod, orig, mod) {
+  const key = `${bareMod}.${orig}`
+  if (V8_GLOBAL_MAP[key]) {
+    const g = V8_GLOBAL_MAP[key]
+    // 避免 "g is not a constructor" — 先查 globalThis，回退 safeRequire
+    return `(typeof globalThis.${g} !== 'undefined' ? globalThis.${g} : ${safeRequire}(${JSON.stringify(mod)}).${orig})`
+  }
+  if (TIMER_GLOBALS.has(orig)) {
+    return `(globalThis.${orig} ?? ${safeRequire}(${JSON.stringify(mod)}).${orig})`
+  }
+  return `${safeRequire}(${JSON.stringify(mod)}).${orig}`
+}
+
 function patchCode(code) {
   // 1. import { A, B as C } from "node:xxx"  （\s* 兼容 minified 无空格情形）
   code = code.replace(
     /import\s*\{([^}]+)\}\s*from\s*"(node:[^"]+)";?[ \t]*\n?/g,
     (_, names, mod) => {
+      const bareMod = mod.replace(/^node:/, '')
       const lines = names.split(',').map(n => {
         n = n.trim()
         const parts = n.split(/\s+as\s+/)
         const orig  = parts[0].trim()
         const alias = (parts[1] || parts[0]).trim()
-        if (TIMER_GLOBALS.has(orig)) {
-          return `const ${alias} = globalThis.${orig} ?? ${safeRequire}(${JSON.stringify(mod)}).${orig};`
-        }
-        return `const ${alias} = ${safeRequire}(${JSON.stringify(mod)}).${orig};`
+        return `const ${alias} = ${resolveNodeExport(bareMod, orig, mod)};`
       })
       return lines.join('\n') + '\n'
     }
