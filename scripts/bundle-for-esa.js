@@ -30,6 +30,15 @@ const { createRequire } = require('node:module')
 const cfRequire = createRequire(require.resolve('@opennextjs/cloudflare'))
 const esbuild = cfRequire('esbuild')
 
+// 所有 Node.js 内置模块，同时涵盖带 node: 前缀和不带前缀两种写法
+// handler.mjs 内部使用旧式裸名称（fs/path/crypto...），必须全部标记为 external
+const { builtinModules } = require('node:module')
+const nodeExternals = [
+  ...builtinModules,                        // fs, path, crypto, async_hooks ...
+  ...builtinModules.map((m) => `node:${m}`), // node:fs, node:path ...
+  'cloudflare:*',                            // cloudflare:workers 等 ESA/CF 运行时 API
+]
+
 console.log('[bundle-for-esa] Re-bundling worker.js for ESA platform...')
 
 esbuild.build({
@@ -38,9 +47,7 @@ esbuild.build({
   format: 'esm',
   platform: 'neutral',  // 不假设 Node.js 或浏览器环境
   target: 'es2022',
-  // node:* 标记为 external：ESA 运行时通过 nodejs_compat 提供
-  // cloudflare:* 标记为 external：DurableObjects 已禁用，保留以防万一
-  external: ['node:*', 'cloudflare:*'],
+  external: nodeExternals,
   outfile: output,
   logLevel: 'warning',
 }).then(() => {
