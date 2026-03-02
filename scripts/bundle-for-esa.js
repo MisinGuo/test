@@ -75,6 +75,27 @@ const V8_GLOBAL_MAP = {
   'url.URLSearchParams': { global: 'URLSearchParams', polyfill: null },
 }
 
+// ─── 整个模块的内联 polyfill（当 safeRequire 返回 {} 时使用）────────────────────
+// key = 裸模块名；value = 可直接嵌入代码的 JS 表达式（IIFE，返回模块对象）
+const MODULE_POLYFILLS = {
+  'path': `(function(){var r={sep:'/',delimiter:':',
+normalize:function(p){var abs=p[0]=='/';var segs=p.split('/');var o=[];for(var i=0;i<segs.length;i++){var s=segs[i];if(s===''||s==='.')continue;if(s==='..'){if(o.length>0)o.pop();}else o.push(s);}return(abs?'/':'')+o.join('/')||'.';},
+join:function(){return r.normalize(Array.prototype.slice.call(arguments).join('/'));},
+resolve:function(){var p='';for(var i=arguments.length-1;i>=0;i--){var s=arguments[i];if(!s)continue;p=s+(p?'/'+p:'');if(s[0]=='/')break;}return r.normalize(p[0]=='/'?p:'/'+p);},
+dirname:function(p){var i=p.lastIndexOf('/');return i<0?'.':i===0?'/':p.slice(0,i);},
+basename:function(p,e){var b=p.split('/').pop()||'';if(e&&b.slice(-e.length)===e)b=b.slice(0,-e.length);return b;},
+extname:function(p){var b=p.split('/').pop()||'';var i=b.lastIndexOf('.');return i<=0?'':b.slice(i);},
+isAbsolute:function(p){return p[0]=='/';},
+relative:function(f,t){var a=r.resolve(f).split('/').filter(Boolean);var b=r.resolve(t).split('/').filter(Boolean);var i=0;while(i<a.length&&i<b.length&&a[i]===b[i])i++;return[].concat(new Array(a.length-i).fill('..'),b.slice(i)).join('/')||'.';},
+format:function(o){return(o.dir?o.dir+'/':'')+((o.base)||(o.name||'')+(o.ext||''));},
+parse:function(p){var b=r.basename(p);var e=r.extname(b);return{root:'',dir:r.dirname(p),base:b,ext:e,name:b.slice(0,b.length-e.length)};},
+};r.posix=r;r.win32=r;return r;})()`,
+  // node:path 的 posix 子对象与 path 本身相同
+  'posix': null, // 由 path.posix 提供，无需单独 polyfill
+}
+// node:path 与 path 同一 polyfill
+MODULE_POLYFILLS['node:path'] = MODULE_POLYFILLS['path']
+
 // 对给定的 node 模块裸名 + 导出名，返回最佳的运行时表达式
 function resolveNodeExport(bareMod, orig, mod) {
   const key   = `${bareMod}.${orig}`
@@ -97,7 +118,19 @@ function patchCode(code) {
   code = code.replace(
     /import\s*\{([^}]+)\}\s*from\s*"(node:[^"]+)";?[ \t]*\n?/g,
     (_, names, mod) => {
-      const bareMod = mod.replace(/^node:/, '')
+      const bareMod    = mod.replace(/^node:/, '')
+      const modPolyfill = MODULE_POLYFILLS[bareMod]
+      if (modPolyfill) {
+        // 批量从 polyfill 解构，避免多次构造对象
+        const parts = names.split(',').map(n => {
+          n = n.trim()
+          const ps    = n.split(/\s+as\s+/)
+          const orig  = ps[0].trim()
+          const alias = (ps[1] || ps[0]).trim()
+          return orig === alias ? orig : `${orig}: ${alias}`
+        })
+        return `const { ${parts.join(', ')} } = ${modPolyfill};\n`
+      }
       const lines = names.split(',').map(n => {
         n = n.trim()
         const parts = n.split(/\s+as\s+/)
@@ -112,15 +145,23 @@ function patchCode(code) {
   // 2. import * as X from "node:xxx"
   code = code.replace(
     /import\s*\*\s*as\s+(\w+)\s+from\s*"(node:[^"]+)";?[ \t]*\n?/g,
-    (_, varName, mod) =>
-      `const ${varName} = ${safeRequire}(${JSON.stringify(mod)});\n`
+    (_, varName, mod) => {
+      const bareMod    = mod.replace(/^node:/, '')
+      const modPolyfill = MODULE_POLYFILLS[bareMod]
+      if (modPolyfill) return `const ${varName} = ${modPolyfill};\n`
+      return `const ${varName} = ${safeRequire}(${JSON.stringify(mod)});\n`
+    }
   )
 
   // 3. import X from "node:xxx"
   code = code.replace(
     /import\s+(\w+)\s*from\s*"(node:[^"]+)";?[ \t]*\n?/g,
-    (_, varName, mod) =>
-      `const ${varName} = ${safeRequire}(${JSON.stringify(mod)});\n`
+    (_, varName, mod) => {
+      const bareMod    = mod.replace(/^node:/, '')
+      const modPolyfill = MODULE_POLYFILLS[bareMod]
+      if (modPolyfill) return `const ${varName} = ${modPolyfill};\n`
+      return `const ${varName} = ${safeRequire}(${JSON.stringify(mod)});\n`
+    }
   )
 
   // 4. import { DurableObject, ... } from "cloudflare:workers" → 空桩类
